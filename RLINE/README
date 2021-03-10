@@ -1,0 +1,1 @@
+This folder has RunRLINE (scripts of prepare inputs, run RLINE, generate outputs, and read outputs) and RLINE (the actual encapsulated RLINE program that RunRLINE calls).
