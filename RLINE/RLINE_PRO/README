@@ -1,2 +1,3 @@
 This folder includes the R-LINE program downloaded from https://www.cmascenter.org/r-line/
 The RunRLINE calls this folder to calculate concentration.
+Unzip the zipped file all in the RLINE_PRO folder before running the scripts.
