@@ -4,12 +4,14 @@
 % to load emission factor
 % can calculate multiple vehicle model year for each day/hour case
 
-hr = 10; jday = 130; vehMY = [2007 2012]; lane = 4; loc = 'LB' ;
-searchRange = 1500; % meter
+hr = 10; jday = 130; vehMY = [2007 2012]; lane = 4; loc = 'SBD' ;
+link_s = 1000; % size of number of links processed in each run 
+vehCAT = 'T7 tractor'; vehFuel = 'DSL';
+%searchRange = 1500; % meter
 k = 1609.344;  % mile to meter conversion factor
 receptor = 'block'; % receptor choose facility or block
 metFname = [loc '_Jday' num2str(jday) 'Hr' num2str(hr) 'sfc.txt' ]; % LB_Jday138Hr10sfc check must be put in RLINE dir
-runFolder = '..\RLINE\';  % the folder with RLINE program
+runFolder = '..\RLINE_PRO\';  % the folder with RLINE program
 recH = 1; % receptor height, aka, general human nose height
 sourceH = 2.5;  % source height, aka, truck exhaust pipe
 addpath(runFolder)
@@ -18,6 +20,8 @@ addpath(runFolder)
 %breathRate= breathRate{:,:};  % update 20200910
 breathRate = 17/24;  % 17 m3/day to m3/hours;
 link=readtable(['linkAttribute_' loc  '.xlsx']); % ID3 (from 1 to n),x1,y1,z1, x2,y2,z2, dCL, sigmaz0,laneNum,emis, 
+% link = link(link.KPH >= 25* k/1000,:);
+
 %Hw1,dw1,Hw2,dw2,Depth,Wtop,Wbottom, KPH (avg speed),FRC, LANES,Residential,LengthM,NetworkID
 
 spd_kph = link.FFS; % caution!!  do we use historical relational speed or average speed, FFS: free flow speed in kph
@@ -45,7 +49,7 @@ uniRecID=recAttrib.recID;
 %% ------ emission
 addpath('..\..\EMFAC'); % adjust if needed! caution!
 emisRates=readtable('new_EMFAC2007and2012Class-LOSANGELES-2018-Annual.csv');
-addpath('..\..\Routing\weights')
+%addpath('..\..\Routing\weights')
 %spdTable=readtable('length_duration_weights_split.csv'); % this input table is preprocessed to be same length with link attribute table
 spd_mph =  spd_kph/k*1000.*hist_rel/100; % spdTable.speed_10am_kph* 0.621371; % kph to mph, caution!! hist_rel is the relational speed
 sp_bin = ceil(spd_mph/5);
@@ -54,9 +58,14 @@ sp_bin(sp_bin>14)=14;
 PM = emisRates.PM2_5_RUNEX; % g/mile
 NOx = emisRates.NOx_RUNEX;
 MY = emisRates.ModelYear;
+CAT = emisRates.VehicleCategory;
+fuel = emisRates.Fuel;
+
+PM_MY = [];
+NOx_MY = [];
 for j = 1:length(vehMY)
-PM_MY(:,j) = PM(MY==vehMY(j));  
-NOx_MY(:,j) = NOx(MY == vehMY(j));
+PM_MY(:,j) = PM(MY==vehMY(j) & strcmp(CAT,vehCAT)& strcmp(fuel,vehFuel)); 
+NOx_MY(:,j) = NOx(MY==vehMY(j) & strcmp(CAT,vehCAT)& strcmp(fuel,vehFuel));
 end
 
 len = height(link);
@@ -89,8 +98,8 @@ linkAttrib=[linkAttrib(:,1:18), pm_per_link/3600/k,  nox_per_link/3600/k]; % cau
 outConcCell=cell(length(uniRecID),1); outConcDim=zeros(length(uniRecID),2);
 linkListFac=cell(length(uniRecID),1); % linkList per unique Facility ID
 sourceHeader= ones(3,18);
-IM_pm = zeros(len, length(vehMY)); % link aggregated IM: one link can affect multiple facilities or blocks 
-IM_nox =zeros(len, length(vehMY)); % therefore, one link's im values are aggregated based on the facilities/blocks within impact
+IM_pm =  []; %zeros(len, length(vehMY)); % link aggregated IM: one link can affect multiple facilities or blocks 
+IM_nox = [];  %zeros(len, length(vehMY)); % therefore, one link's im values are aggregated based on the facilities/blocks within impact
 
 %{'Source input file' ;...
 %'Group  X_b    Y_b   Z_b    X_e    Y_e   Z_e  dCL  sigmaz0 #lanes  Emis  Hw1  dw1  Hw2  dw2 Depth  Wtop  Wbottom';...
@@ -104,31 +113,35 @@ receptorHeader= ones(3,3);
 
 rec_max_conc_pm = zeros(numel(uniRecID),length(vehMY));
 rec_max_conc_nox = zeros(numel(uniRecID),length(vehMY));
-    for i1= 1: numel(uniRecID) % Mill St
+
+linkID_mat = reshape(link.ID(1:link_s*floor(len/1000)), 1000, []); 
+linkID_mat2 = link.ID(link_s*floor(len/1000)+1 : end);
+
+    for i1= 1: ceil(len/1000)
     
-    recIDin=uniRecID(i1);   
-    %recIDin = [8   9  45 ];  % Mill St
     %-----receptor file
-    recLoc=JoinTable(1,recIDin,1,[recAttrib{:,:}(:,1:4) pop]);  % update 20200910 
     
-    pop_i = recLoc(:,5:end);    % update 20200910 
-%     if recLoc(pop_col)== 0  % if receptor population is zero, do not need to calculate
-%         continue
-%     end
+    if hr >= 9 && hr <=17 
+    pop = recAttrib.PopWH;
+    else
+    pop = recAttrib.PopOH;
+    end
+    
     recFname=[ loc '_' receptor 'ID'  '.txt']; % caution, num2str(facIDin), if not keeping intermediate files do not add facIDin
-    dlmwrite([runFolder recFname],[receptorHeader; recLoc(:,2:3) recLoc(:,4)+recH]) % control receptor height, caution
+    dlmwrite([runFolder recFname],[receptorHeader; recAttrib.X recAttrib.Y recAttrib.Z + recH]) % control receptor height, caution
     
     %----- prepare for inputs
     
-    %linkList=linkID(recID==recIDin);
-    linkList = SearchLinkInRange(recIDin, recAttrib, link, searchRange); %
-    %linkList = [12 13  ]  ;  % Mill St
-    %linkList= linkAttrib(:,1);  % links on Mill St
-    
-    %linkBreak = BreakLink(linkList, pointspd); %
+    if i1 == ceil(len/1000)
+        linkList =  linkID_mat2; %SearchLinkInRange(recIDin, recAttrib, link, searchRange); %
+    else
+        linkList = linkID_mat(:,i1);
+    end 
+   
     if isempty(linkList)
        continue 
     end
+    
     linkPara=JoinTable(1,linkList,1,linkAttrib);
     source=linkPara(:,1:18);  % caution
     pm_i = repmat(linkPara(:,11),1, length(vehMY)).*linkPara(:,19:(19+length(vehMY)-1));% caution,could be multiple columns, link based emission rate in g/m/s
@@ -155,23 +168,29 @@ rec_max_conc_nox = zeros(numel(uniRecID),length(vehMY));
     %----- run RLINE
     
      %[~, ~]=dos([runFolder 'RLINEv1_2_g95.exe']);
-     cd ../RLINE
+     cd ../RLINE_PRO
      system('RLINEv1_2_g95.exe');  % will show RLINE run smsg in matlab
-     cd ../RunRLINE_Script
+     cd ../RunRLINE
     
     %% ----- read output and save into matrix
     outCell=readtable(outFname);
+    conc_norm_er_1 = outCell(:, 7: end-1);  % concentration with all normalized emission rate as 1, need to be multiplied by emission factor in next steps.
+    
+    if size(conc_norm_er_1,1) ~=  size(recAttrib,1) || size(conc_norm_er_1,2) ~= size(linkList, 1)
+       warning('Output concentration dimention mismatches with input links or receptors') 
+    end
+    
     % find reference line, the line of Jday, to determine where the
     % concentration vector starts in the csv output file
     %refLine=FindStr([num2str(jday) ','] , outCell); % find reference line, the line of Jday
     %concRow=refLine(1)+5; % jday, hour, recX, recY, recZ, concentration 1, 2, ... n    
     %outConcText=outCell(concRow:end);
-    outConcText = outCell.SOURCEFILE{end}; % locate the last row of the first colume to find the concentrations
-    outConcVec = str2num(outConcText);  % when emis rate is 1 g/m/s, this conc need to be multiplied with real PM/NOx emis rate
-    outConcVec = outConcVec(7:end)';
-    if length(outConcVec)~= length(linkList) % check if the extraction matches
-        display(['Dimension of extracted vector are mismatched for Facility# ' num2str(recIDin)])
-    end
+    %outConcText = outCell.SOURCEFILE{end}; % locate the last row of the first colume to find the concentrations
+    %outConcVec = str2num(outConcText);  % when emis rate is 1 g/m/s, this conc need to be multiplied with real PM/NOx emis rate
+    %outConcVec = outConcVec(7:end)';
+    %if length(outConcVec)~= length(linkList) % check if the extraction matches
+    %    display(['Dimension of extracted vector are mismatched for Facility# ' num2str(recIDin)])
+    %end
     %convert into txt because there is ',' after every number, outdated
     %because of better conversion method available
     %%ConvertToTxt('Cell2Matrix.txt',outConcText); 
@@ -183,22 +202,42 @@ rec_max_conc_nox = zeros(numel(uniRecID),length(vehMY));
     
     %im2Fac=outConcVec*17/24* facLoc(5);%.* pm_i./nox_i ;  % caution! inhalation mass of each facility, 17 m3/day, im = C*t*breathrate*numberofpopulation
     
-    im_receptor_pm = pop_i*(breathRate)'*outConcVec.* pm_i;   %breathing rate: m3/hour update 20200910, inhalation (ug) = pop x br x con  
+    er_mat_pm = permute(pm_i,[3, 1, 2] );   % emission rate matrix 
     
-    im_receptor_nox = pop_i*(breathRate)'*outConcVec.*nox_i;  %update 20200910  beforeupdate outConcVec*17/24* recLoc(pop_col).*nox_i
+    er_mat_nox = permute(nox_i,[3, 1, 2] );
     
-   % rec_max_conc_pm(i1,:) = max(outConcVec.* pm_i);
+    conv_conc_pm  = conc_norm_er_1{:,:}.*er_mat_pm;
+    
+    conv_conc_nox = conc_norm_er_1{:,:}.*er_mat_nox;
+    
+    clear im_receptor_pm im_receptor_nox
+    
+    for i2 = 1: size(conv_conc_pm, 3)
+        im_receptor_pm (:,i2) = (breathRate*pop') * conv_conc_pm(:,:,i2);
+    end  %breathing rate: m3/hour update 20200910, inhalation (ug) = pop x br x con  
+    
+    for i2 = 1: size(conv_conc_nox, 3)
+        im_receptor_nox (:,i2) = (breathRate*pop') * conv_conc_nox(:,:,i2);
+    end  
+    
+    IM_pm = [IM_pm; im_receptor_pm];
+    
+    IM_nox = [IM_nox; im_receptor_nox];
+    
+    % rec_max_conc_pm(i1,:) = max(outConcVec.* pm_i);
    % rec_max_conc_nox(i1,:) = max(outConcVec.* nox_i);
     
-    for i2=1:length(linkList)
-        
-    IM_pm(linkList(i2),:)=IM_pm(linkList(i2),:)+ im_receptor_pm(i2,:); % need to aggregate by link    
-    IM_nox(linkList(i2),:)=IM_nox(linkList(i2),:)+ im_receptor_nox(i2,:); 
-    end
+%     for i2=1:length(linkList)
+%         
+%     IM_pm(linkList(i2),:)=IM_pm(linkList(i2),:)+ im_receptor_pm(i2,:); % need to aggregate by link    
+%     IM_nox(linkList(i2),:)=IM_nox(linkList(i2),:)+ im_receptor_nox(i2,:); 
+%     
+%     end
+     
     
     end
     
-    % check if the total inhaled mass is less than the total emissions, the
+    % check if the total inhal ed mass is less than the total emissions, the
     % ratio should be no smaller than 1
     mass_per_link_pm = pm_per_link.*link.METERS/k*10^6; % ug = g/mile * meter/1609.3*10E6  
     ratio_pm = mass_per_link_pm./IM_pm; 
@@ -211,7 +250,7 @@ rec_max_conc_nox = zeros(numel(uniRecID),length(vehMY));
     % group sum here by TomTom network ID
     network_id = link.NetworkID;
     IM_nwid = table(network_id, IM_pm, IM_nox); % IM by network ID, output "IM_pm" will be in the sequence of the vehicle model year
-    stat = grpstats(IM_nwid, 'network_id', 'sum');
+    stat = grpstats(IM_nwid, 'network_id', 'sum');  % sum the inhalation by NetworkID, this will also sort the table by NetworkID
     writetable(stat, ['im_' receptor '_hr' num2str(hr) '.csv']); 
     
     sum(ratio_pm<1)
