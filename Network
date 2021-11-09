@@ -1,0 +1,3 @@
+The original coordinates are in latitude and longitude. But it was converted to UTM 10N by mistake.
+The coordinates should be converted back to latitdue and longitude with UTM '10N'. Please double check if the range of coordinates should shown in Riverside area.
+Then convert the lat & long to UTM 11S.
